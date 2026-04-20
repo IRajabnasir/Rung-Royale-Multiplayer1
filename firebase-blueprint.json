@@ -1,0 +1,75 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "Stores user display name and match statistics",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "displayName": { "type": "string" },
+        "email": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "stats": {
+          "type": "object",
+          "properties": {
+            "wins": { "type": "integer" },
+            "sets": { "type": "integer" },
+            "courts": { "type": "integer" }
+          }
+        }
+      },
+      "required": ["uid", "displayName"]
+    },
+    "Match": {
+      "title": "Game Match",
+      "description": "Represents a single Rung game session",
+      "type": "object",
+      "properties": {
+        "matchId": { "type": "string" },
+        "hostId": { "type": "string" },
+        "type": { "type": "string", "enum": ["public", "private"] },
+        "status": { "type": "string", "enum": ["waiting", "playing", "finished"] },
+        "players": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "name": { "type": "string" },
+              "position": { "type": "string" },
+              "isAI": { "type": "boolean" },
+              "ready": { "type": "boolean" }
+            }
+          }
+        },
+        "state": {
+          "type": "object",
+          "properties": {
+            "trumpSuit": { "type": "string" },
+            "currentPlayerIndex": { "type": "integer" },
+            "currentTrick": { "type": "object" },
+            "scores": { "type": "object" },
+            "tricksInPile": { "type": "integer" },
+            "lastTrickWinnerId": { "type": "string" },
+            "hasSecuredInRound": { "type": "boolean" },
+            "securingThreshold": { "type": "integer" },
+            "history": { "type": "array" }
+          }
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["matchId", "hostId", "status", "players"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "/matches/{matchId}": {
+      "schema": "Match",
+      "description": "Active and past matches"
+    }
+  }
+}
