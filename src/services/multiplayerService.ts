@@ -94,7 +94,9 @@ export const listenToMatch = (matchId: string, callback: (match: Match) => void)
 };
 
 export const findPublicMatches = async () => {
-  const q = query(collection(db, 'matches'), where('type', '==', 'public'), where('status', '==', 'waiting'));
+  const q = query(collection(db, 'matches'), where('status', '==', 'waiting'));
   const querySnapshot = await getDocs(q);
-  return querySnapshot.docs.map(doc => doc.data() as Match);
+  return querySnapshot.docs
+    .map(doc => doc.data() as Match)
+    .filter(m => m.type === 'public');
 };

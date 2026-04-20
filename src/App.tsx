@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Trophy, Settings, RotateCcw, User as UserIcon, Bot, Heart, Club, Spade, Diamond as Diamonds, Info, Layers, ChevronRight, Globe, Lock, Plus, LogOut, Users, Copy, Check, MessageSquare } from 'lucide-react';
 import { User as FirebaseUser, onAuthStateChanged, signOut } from 'firebase/auth';
@@ -113,6 +113,8 @@ export default function App() {
   const [chatOpen, setChatOpen] = useState(false);
   const [messages, setMessages] = useState<{ id: string, text: string, senderId: string, senderName: string }[]>([]);
   const [activeTab, setActiveTab] = useState<'home' | 'shop' | 'friends' | 'clubs' | 'chest'>('home');
+  const [homeSubView, setHomeSubView] = useState<'main' | 'arena'>('main');
+  const matchmakingCancelled = useRef(false);
 
   // Audio effects
   const playSound = (type: 'shuffle' | 'snap') => {
@@ -247,9 +249,12 @@ export default function App() {
       return;
     }
     setJoining(true);
+    matchmakingCancelled.current = false;
     setMessage("Searching for global matches...");
     try {
       const publics = await findPublicMatches();
+      if (matchmakingCancelled.current) return;
+
       if (publics.length > 0) {
         setMessage(`Found match ${publics[0].matchId}! Joining...`);
         await handleJoinMatch(publics[0].matchId);
@@ -258,10 +263,21 @@ export default function App() {
         await handleCreateMatch('public');
       }
     } catch (e: any) {
-      setMessage(`Matchmaking failed: ${e.message}`);
+      if (!matchmakingCancelled.current) {
+        setMessage(`Matchmaking failed: ${e.message}`);
+      }
     } finally {
-      setJoining(false);
+      if (!matchmakingCancelled.current) {
+        setJoining(false);
+      }
     }
+  };
+
+  const cancelMatchmaking = () => {
+    matchmakingCancelled.current = true;
+    setJoining(false);
+    setMessage("Matchmaking cancelled.");
+    setTimeout(() => setMessage(''), 2000);
   };
 
   const players = status.players;
@@ -992,6 +1008,25 @@ export default function App() {
                 </button>
              </div>
 
+             {/* Matchmaking Status / Feedback */}
+             {message && (
+               <motion.div 
+                 initial={{ height: 0, opacity: 0 }}
+                 animate={{ height: 'auto', opacity: 1 }}
+                 className="mb-4 bg-accent/20 border border-accent/40 rounded-2xl p-4 text-center relative group"
+               >
+                 <p className="text-[10px] text-accent uppercase font-black tracking-widest animate-pulse mb-2">{message}</p>
+                 {joining && (
+                   <button 
+                     onClick={cancelMatchmaking}
+                     className="px-4 py-1.5 bg-red-500/20 hover:bg-red-500/40 border border-red-500/50 rounded-xl text-red-500 text-[10px] font-black uppercase tracking-widest transition-all"
+                   >
+                     Cancel Matchmaking
+                   </button>
+                 )}
+               </motion.div>
+             )}
+
              {/* Dynamic Content based on activeTab */}
              <div className="flex-1 overflow-y-auto pb-4">
                 {activeTab === 'home' && (
@@ -1038,43 +1073,86 @@ export default function App() {
                 </div>
              </div>
 
-             {/* Main Game Options */}
-             <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4">
-                <motion.button 
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
-                  onClick={() => { setGameMode('single'); startNewGame(); }}
-                  className="bg-yellow-500 rounded-[2.5rem] border-b-8 border-yellow-700 p-4 flex flex-col items-center justify-between text-slate-900 shadow-xl"
-                >
-                   <div className="flex-1 flex items-center justify-center py-6">
-                      <div className="grid grid-cols-2 gap-2">
-                        <Trophy size={64} className="text-yellow-900" />
-                        <Bot size={64} className="text-yellow-900" />
+              {/* Main Game Options */}
+              <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4 auto-rows-min">
+                {homeSubView === 'main' ? (
+                  <>
+                    <motion.button 
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={() => { setGameMode('single'); startNewGame(); }}
+                      className="bg-yellow-500 rounded-[2.5rem] border-b-8 border-yellow-700 p-4 flex flex-col items-center justify-between text-slate-900 shadow-xl"
+                    >
+                      <div className="flex-1 flex items-center justify-center py-6">
+                        <div className="grid grid-cols-2 gap-2">
+                          <Trophy size={64} className="text-yellow-900" />
+                          <Bot size={64} className="text-yellow-900" />
+                        </div>
                       </div>
-                   </div>
-                   <div className="w-full bg-yellow-600/50 py-3 rounded-b-[2rem] font-black text-xl uppercase tracking-tighter italic">2 Player (AI)</div>
-                </motion.button>
+                      <div className="w-full bg-yellow-600/50 py-3 rounded-b-[2rem] font-black text-xl uppercase tracking-tighter italic">2 Player (AI)</div>
+                    </motion.button>
 
-                <motion.button 
-                  whileHover={{ scale: 1.02 }}
-                  whileTap={{ scale: 0.98 }}
-                  onClick={handleFindMatch}
-                  className="bg-emerald-500 rounded-[2.5rem] border-b-8 border-emerald-700 p-4 flex flex-col items-center justify-between text-slate-900 shadow-xl"
-                >
-                   <div className="flex-1 flex items-center justify-center py-6 text-yellow-300">
-                      <Globe size={120} />
-                   </div>
-                   <div className="w-full bg-emerald-600/50 py-3 rounded-b-[2rem] font-black text-xl uppercase tracking-tighter italic">Online Battle</div>
-                </motion.button>
-              </div>
+                    <motion.button 
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={() => setHomeSubView('arena')}
+                      className="bg-emerald-500 rounded-[2.5rem] border-b-8 border-emerald-700 p-4 flex flex-col items-center justify-between text-slate-900 shadow-xl relative overflow-hidden group"
+                    >
+                      <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                        <Globe size={180} />
+                      </div>
+                      <div className="flex-1 flex items-center justify-center py-6 text-yellow-300 relative z-10">
+                        <Globe size={120} className="animate-pulse" />
+                      </div>
+                      <div className="w-full bg-emerald-600/50 py-3 rounded-b-[2rem] font-black text-xl uppercase tracking-tighter italic relative z-10">Online Arena</div>
+                    </motion.button>
+                  </>
+                ) : (
+                  <>
+                    <div className="md:col-span-2 flex items-center justify-between mb-2">
+                      <button onClick={() => setHomeSubView('main')} className="text-[10px] font-black uppercase text-accent/60 flex items-center gap-1 hover:text-accent transition-colors">
+                        <Plus size={10} className="rotate-45" /> Back to menu
+                      </button>
+                      <span className="text-[10px] font-black uppercase text-white/20 tracking-widest italic">Battle Terminal</span>
+                    </div>
+                    
+                    <motion.button 
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={handleFindMatch}
+                      disabled={joining}
+                      className={`bg-emerald-500 rounded-[2.5rem] border-b-8 border-emerald-700 p-6 flex flex-col items-center justify-center text-slate-900 shadow-xl transition-all md:col-span-2 ${joining ? 'opacity-50 grayscale cursor-wait' : ''}`}
+                    >
+                      <div className="flex items-center gap-4">
+                        <Globe size={48} className={joining ? 'animate-spin' : ''} />
+                        <div className="text-left">
+                          <h4 className="text-2xl font-black italic uppercase tracking-tighter leading-none mb-1">Random vs Battle</h4>
+                          <p className="text-[10px] font-bold opacity-60 uppercase">Auto-join available global lobbies</p>
+                        </div>
+                      </div>
+                    </motion.button>
 
-              <div className="grid grid-cols-2 gap-2 mt-4">
-                <button onClick={() => setShowJoinInput(true)} className="bg-accent p-4 rounded-2xl text-slate-900 font-black uppercase text-xs italic tracking-tighter flex items-center justify-center gap-2 border-b-4 border-accent-dark">
-                  <Plus size={16} /> Join Code
-                </button>
-                <button onClick={() => handleCreateMatch('private')} className="bg-white p-4 rounded-2xl text-slate-900 font-black uppercase text-xs italic tracking-tighter flex items-center justify-center gap-2 border-b-4 border-white/20">
-                  <Plus size={16} /> Private
-                </button>
+                    <motion.button 
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={() => setShowJoinInput(true)}
+                      className="bg-accent rounded-3xl border-b-6 border-accent-dark p-6 h-32 flex flex-col items-center justify-center gap-3 text-slate-900 shadow-lg font-black uppercase italic tracking-tighter"
+                    >
+                      <Lock size={32} />
+                      Join with Code
+                    </motion.button>
+
+                    <motion.button 
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={() => handleCreateMatch('private')}
+                      className="bg-white rounded-3xl border-b-6 border-slate-300 p-6 h-32 flex flex-col items-center justify-center gap-3 text-slate-900 shadow-lg font-black uppercase italic tracking-tighter"
+                    >
+                      <Plus size={32} />
+                      Private Room
+                    </motion.button>
+                  </>
+                )}
               </div>
             </>
           )}
