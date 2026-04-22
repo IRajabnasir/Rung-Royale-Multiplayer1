@@ -1,4 +1,4 @@
-import { doc, getDoc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, serverTimestamp, deleteDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 
 export interface UserProfile {
@@ -42,6 +42,7 @@ export const syncUserProfile = async (user: any) => {
       displayName: user.displayName || 'Anonymous',
       email: user.email,
       photoURL: user.photoURL,
+      isGuest: !!user.isAnonymous,
       stats: {
         wins: 0,
         sets: 0,
@@ -82,6 +83,5 @@ export const updateUserProfile = async (uid: string, updates: Partial<UserProfil
 
 export const deleteUserProfile = async (uid: string) => {
   const userRef = doc(db, 'users', uid);
-  const { deleteDoc } = await import('firebase/firestore');
   await deleteDoc(userRef);
 };

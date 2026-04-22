@@ -12,3 +12,30 @@
     }
   }
 }
+
+
+/* ---------------------------------------------------------------------------
+ * Mobile safe-area insets (Capacitor / native WebView)
+ * Keeps content clear of iPhone notches, Dynamic Island, and home bars.
+ * ------------------------------------------------------------------------- */
+html, body, #root {
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+.rr-safe-area-top    { padding-top:    env(safe-area-inset-top);    }
+.rr-safe-area-bottom { padding-bottom: env(safe-area-inset-bottom); }
+.rr-safe-area-y {
+  padding-top:    env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Prevent iOS from enabling pull-to-refresh over the game table. */
+html, body {
+  overscroll-behavior-y: contain;
+}
+/* Disable text selection on taps during gameplay — feels nicer on native. */
+.rr-no-select {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}

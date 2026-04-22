@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+data/raw/*.jsonl
+data/encoded/*.npz
+models/checkpoints/
+models/*.onnx

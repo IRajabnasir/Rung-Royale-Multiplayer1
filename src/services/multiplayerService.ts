@@ -119,9 +119,13 @@ export const listenToMatch = (matchId: string, callback: (match: Match) => void)
 };
 
 export const findPublicMatches = async () => {
-  const q = query(collection(db, 'matches'), where('status', '==', 'waiting'));
+  // Server-side filter. Requires a composite index on (status, type) —
+  // Firebase will log a one-click index creation link the first time this runs.
+  const q = query(
+    collection(db, 'matches'),
+    where('status', '==', 'waiting'),
+    where('type', '==', 'public')
+  );
   const querySnapshot = await getDocs(q);
-  return querySnapshot.docs
-    .map(doc => doc.data() as Match)
-    .filter(m => m.type === 'public');
+  return querySnapshot.docs.map(doc => doc.data() as Match);
 };

@@ -8,6 +8,11 @@ service cloud.firestore {
 
     // --- Helpers ---
     function isSignedIn() {
+      // Any authenticated user (email-verified OR anonymous) can play.
+      // Anti-cheat for ranked ladders is handled separately in match logic.
+      return request.auth != null;
+    }
+    function isVerified() {
       return request.auth != null && request.auth.token.email_verified == true;
     }
     function isOwner(userId) {
@@ -80,5 +85,17 @@ service cloud.firestore {
       
       allow delete: if isHost() && isValidId(matchId);
     }
+
+    // --- Game event telemetry (append-only, for AI training) ---
+    match /game_events/{eventId} {
+      // Signed-in users may create events, never read/update/delete.
+      // Analytics pipeline reads with an admin SDK, not the client.
+      allow create: if isSignedIn() &&
+                    incoming().type in ['play_card', 'trick_resolved', 'round_resolved'] &&
+                    (incoming().matchId is string) &&
+                    (incoming().matchId.size() <= 64);
+      allow read, update, delete: if false;
+    }
+
   }
 }

@@ -9,7 +9,7 @@ import confetti from 'canvas-confetti';
 import { Trophy, Settings, RotateCcw, User as UserIcon, Bot, Heart, Club, Spade, Diamond as Diamonds, Info, Layers, ChevronRight, Globe, Lock, Plus, LogOut, Users, Copy, Check, MessageSquare, ShoppingBag, Home } from 'lucide-react';
 import { User as FirebaseUser, onAuthStateChanged, signOut } from 'firebase/auth';
 import { doc, updateDoc } from 'firebase/firestore';
-import { auth, signInWithGoogle, db } from './lib/firebase';
+import { auth, signInWithGoogle, signInAsGuest, db } from './lib/firebase';
 import { syncUserProfile, UserProfile, updateUserProfile, deleteUserProfile } from './services/userService';
 import { createMatch, joinMatch, startMatch, updateMatchState, listenToMatch, findPublicMatches, addAIPlayer } from './services/multiplayerService';
 import { Card as CardType, Suit, Rank, Player, GameState, GameStatus, Theme, PlayerPosition, Match, MatchState } from './types';
@@ -21,8 +21,22 @@ import {
   determineTrickWinner, 
   canPlayCard, 
   getAIMove,
-  sortHand
+  sortHand,
+  chooseTrump,
+  shouldSecure,
+  teamOf,
+  type AIDifficulty,
 } from './lib/gameLogic';
+import { logPlayCard, logTrickResolved, stripHand, stripCard } from './services/telemetryService';
+import { Capacitor } from '@capacitor/core';
+import { StatusBar } from '@capacitor/status-bar';
+import { ScreenOrientation } from '@capacitor/screen-orientation';
+import { Haptics, ImpactStyle, NotificationType } from '@capacitor/haptics';
+
+/** Small helpers for native haptic feedback. No-op on web. */
+const hapticTap = () => { if (Capacitor.isNativePlatform()) Haptics.impact({ style: ImpactStyle.Light }).catch(() => {}); };
+const hapticWin = () => { if (Capacitor.isNativePlatform()) Haptics.notification({ type: NotificationType.Success }).catch(() => {}); };
+const hapticLose = () => { if (Capacitor.isNativePlatform()) Haptics.notification({ type: NotificationType.Warning }).catch(() => {}); };
 
 // Component: CardUI
 const getSuitIcon = (suit: Suit, size = 16) => {
@@ -59,7 +73,7 @@ const CardUI = ({
         layout
         initial={{ scale: 0.8, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}
-        className="relative w-14 h-20 sm:w-18 sm:h-26 rounded-xl shadow-[0_4px_12px_rgba(0,0,0,0.5)] border border-white/20 overflow-hidden bg-slate-900"
+        className="relative w-14 h-20 sm:w-18 sm:h-26 rounded-xl shadow-[0_2px_4px_rgba(0,0,0,0.4)] border border-white/20 overflow-hidden bg-slate-900"
         style={{ 
           backgroundImage: theme.cardPattern ? `url(${theme.cardPattern})` : 'none',
           backgroundSize: 'cover'
@@ -79,8 +93,8 @@ const CardUI = ({
       whileHover={!disabled ? { y: -12, scale: 1.05, filter: 'brightness(1.1)' } : {}}
       whileTap={!disabled ? { scale: 0.95 } : {}}
       onClick={!disabled ? onClick : undefined}
-      className={`relative w-12 h-18 sm:w-18 sm:h-26 rounded-xl shadow-[0_8px_16px_rgba(0,0,0,0.3)] border flex flex-col justify-between p-2 cursor-pointer transition-all ${
-        disabled ? 'grayscale-[0.6] opacity-80 cursor-not-allowed' : 'hover:shadow-accent/20'
+      className={`relative w-12 h-18 sm:w-18 sm:h-26 rounded-xl shadow-[0_1px_3px_rgba(0,0,0,0.35)] border flex flex-col justify-between p-2 cursor-pointer transition-all ${
+        disabled ? 'grayscale-[0.6] opacity-80 cursor-not-allowed' : 'hover:shadow-[0_4px_10px_rgba(0,0,0,0.4)]'
       }`}
       style={{ 
         backgroundColor: theme.colors.cardFront,
@@ -113,6 +127,7 @@ export default function App() {
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [gameMode, setGameMode] = useState<'single' | 'multiplayer'>('single');
+  const [aiDifficulty, setAiDifficulty] = useState<AIDifficulty>('medium');
   const [match, setMatch] = useState<Match | null>(null);
   const [publicMatches, setPublicMatches] = useState<Match[]>([]);
   const [joining, setJoining] = useState(false);
@@ -189,6 +204,28 @@ export default function App() {
     });
   }, []); // Only run on mount
 
+  // Native mobile: orientation + status bar based on game state.
+  // Gameplay = landscape + immersive. Menus = portrait + status bar visible.
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    const gamePlayStates: GameState[] = ['playing', 'dealing', 'declaring_trump', 'deciding_secure', 'round_end'];
+    const inGame = gamePlayStates.includes(status.state);
+
+    (async () => {
+      try {
+        if (inGame) {
+          await ScreenOrientation.lock({ orientation: 'landscape' });
+          await StatusBar.hide();
+        } else {
+          await ScreenOrientation.lock({ orientation: 'portrait' });
+          await StatusBar.show();
+        }
+      } catch (e) {
+        console.warn('native orientation/statusbar adjust failed', e);
+      }
+    })();
+  }, [status.state]);
+
   // Multiplayer Match Listener
   useEffect(() => {
     if (match?.matchId && gameMode === 'multiplayer') {
@@ -215,24 +252,20 @@ export default function App() {
     }
   }, [match?.matchId, gameMode, user?.uid]);
 
-  const handleGuestLogin = (isPrivate: boolean = false) => {
-    const guestId = `guest_${Math.random().toString(36).substring(2, 9)}`;
-    const guestProfile: UserProfile = {
-      uid: guestId,
-      displayName: `${isPrivate ? 'Shadow' : 'Guest'}_${guestId.split('_')[1].toUpperCase()}`,
-      email: null,
-      photoURL: null,
-      stats: { wins: 0, sets: 0, courts: 0, superCourts: 0, winStreak: 0, maxWinStreak: 0 },
-      progression: { level: 1, xp: 0, trophies: 0 },
-      currency: { coins: 1000, gems: 10 },
-      friends: [],
-      badges: [],
-      isGuest: true
-    };
-    setUserProfile(guestProfile);
-    // Move to dashboard
-    setStatus(prev => ({ ...prev, state: 'dashboard' }));
-    setMessage(isPrivate ? "Entered via Private Key" : `Logged in as Guest: ${guestProfile.displayName}`);
+  const handleGuestLogin = async (isPrivate: boolean = false) => {
+    try {
+      // Real Firebase anonymous sign-in. onAuthStateChanged will then sync a
+      // UserProfile in Firestore automatically, so multiplayer works for guests.
+      const fbUser = await signInAsGuest(isPrivate);
+      setMessage(
+        isPrivate
+          ? `Entered via Private Key as ${fbUser.displayName}`
+          : `Logged in as ${fbUser.displayName}`
+      );
+    } catch (e: any) {
+      console.error('Guest sign-in failed', e);
+      setMessage(`Guest sign-in failed: ${e?.message || 'unknown error'}`);
+    }
   };
 
   const handleSignOut = async () => {
@@ -524,8 +557,32 @@ export default function App() {
     if (status.players[status.currentPlayerIndex].id !== playerId) return;
 
     playSound('snap');
+    hapticTap();
     const leadSuit = status.currentTrick.leadSuit;
     const playerHand = status.players[status.currentPlayerIndex].hand;
+
+    // Telemetry: snapshot of what this player observed before playing.
+    try {
+      const actingPlayer = status.players[status.currentPlayerIndex];
+      const legalActions = playerHand.filter(c => canPlayCard(c, playerHand, leadSuit || undefined));
+      logPlayCard({
+        matchId: match?.matchId || 'single',
+        handNumber: status.matchStats.roundsPlayed,
+        trickNumber: status.history?.length ?? 0,
+        playerId: actingPlayer.id,
+        isAI: actingPlayer.isAI,
+        aiDifficulty: actingPlayer.isAI ? aiDifficulty : undefined,
+        position: actingPlayer.position,
+        trumpSuit: status.trumpSuit,
+        leadSuit: leadSuit,
+        aceOffMode: status.aceOffMode,
+        actorHand: stripHand(playerHand),
+        trickSoFar: status.currentTrick.cards.map(tc => ({ playerId: tc.playerId, card: stripCard(tc.card) })),
+        legalActions: stripHand(legalActions),
+        actionCard: stripCard(card),
+        teamScoresBefore: { team1: status.scores.team1.tricks, team2: status.scores.team2.tricks },
+      }).catch(() => {});
+    } catch { /* never block gameplay on telemetry */ }
     
     if (!canPlayCard(card, playerHand, leadSuit)) {
       setMessage(`You must follow the lead suit: ${leadSuit}`);
@@ -560,6 +617,18 @@ export default function App() {
           const winnerId = determineTrickWinner({ cards: newTrickCards, leadSuit: newLeadSuit }, prev.trumpSuit, prev.aceOffMode);
           const winnerIndex = prev.players.findIndex(p => p.id === winnerId);
           const winner = prev.players[winnerIndex];
+          // Telemetry: trick resolution
+          try {
+            const winnerTeam = (winnerIndex === 0 || winnerIndex === 2) ? 1 : 2 as 1 | 2;
+            logTrickResolved({
+              matchId: match?.matchId || 'single',
+              handNumber: prev.matchStats.roundsPlayed,
+              trickNumber: prev.history?.length ?? 0,
+              winnerPlayerId: winnerId,
+              winnerTeam,
+              trumpSuit: prev.trumpSuit,
+            }).catch(() => {});
+          } catch { /* noop */ }
           const winningCard = newTrickCards.find(tc => tc.playerId === winnerId)!.card;
           
           const winnerTeamNum = (winnerIndex === 0 || winnerIndex === 2) ? 1 : 2;
@@ -694,6 +763,14 @@ export default function App() {
     const winTeamLabel = winnerTeamNum === 1 ? "Team 1" : "Team 2";
     return { sirTeamNum, winnerTeamNum, is13Win, type, winTeamLabel };
   }, [status.state, status.players, status.scores.team1.tricks, status.scores.team2.tricks]);
+
+  // Haptic feedback on round end (native only).
+  useEffect(() => {
+    if (!roundEndDetails) return;
+    const myTeam = 1; // single-player convention: the human sits at 'bottom' on team 1
+    if (roundEndDetails.winnerTeamNum === myTeam) hapticWin();
+    else hapticLose();
+  }, [roundEndDetails]);
 
   const handleRoundEnd = (finalScores: { team1: { tricks: number }, team2: { tricks: number } }) => {
     const currentSirIndex = status.players.findIndex(p => p.isSir);
@@ -854,32 +931,65 @@ export default function App() {
 
     if (currentState === 'playing' || currentState === 'declaring_trump' || currentState === 'deciding_secure') {
       const isAIHand = currentPlayer.isAI;
-      
+
       // If human is declaring trump, don't auto-declare
       if (currentState === 'declaring_trump' && !isAIHand) return;
-      
+
+      // MULTIPLAYER RACE FIX:
+      // In multiplayer, every connected client runs this effect. Without a
+      // gate, all clients would race to submit the AI's move, causing
+      // duplicate writes and state corruption. Only the match host owns
+      // AI turns.
+      if (gameMode === 'multiplayer' && match && user && match.hostId !== user.uid) {
+        return;
+      }
+
       // AI needs to act?
       if (isAIHand || (currentState === 'deciding_secure' && currentPlayer.isAI)) {
         const timer = setTimeout(() => {
+          // Resolve partner & played-history for this AI decision.
+          const partner = status.players.find(
+            p => p.id !== currentPlayer.id && teamOf(p.position) === teamOf(currentPlayer.position)
+          );
+          const playedCards: CardType[] = (status.history || []).flatMap(
+            (h: any) => (h.cards || []).map((c: any) => c.card)
+          );
+          const difficulty: AIDifficulty = aiDifficulty;
+
           if (currentState === 'declaring_trump') {
-            const suits = currentPlayer.hand.map(c => c.suit);
-            const counts = suits.reduce((acc, suit) => ({ ...acc, [suit]: (acc[suit] || 0) + 1 }), {} as Record<Suit, number>);
-            const bestSuit = (Object.keys(counts) as Suit[]).sort((a, b) => counts[b] - counts[a])[0] || 'hearts';
+            const bestSuit = chooseTrump(currentPlayer.hand, difficulty);
             console.log(`AI ${currentPlayer.name} declaring trump: ${bestSuit}`);
             declareTrump(bestSuit);
           } else if (currentState === 'playing' && status.currentTrick.cards.length < 4) {
-            const move = getAIMove(currentPlayer, status.currentTrick, status.trumpSuit, status.aceOffMode);
+            const move = getAIMove(
+              currentPlayer,
+              status.currentTrick,
+              status.trumpSuit || undefined,
+              status.aceOffMode,
+              {
+                difficulty,
+                partnerId: partner?.id,
+                playedCards,
+              }
+            );
             console.log(`AI ${currentPlayer.name} playing: ${move.id}`);
             playCard(currentPlayer.id, move);
           } else if (currentState === 'deciding_secure') {
-            const isTeam2 = currentPlayer.position === 'left' || currentPlayer.position === 'right';
-            const score = isTeam2 ? status.scores.team2.tricks : status.scores.team1.tricks;
-            
-            console.log(`AI ${currentPlayer.name} deciding to secure/court. Current score: ${score}`);
-            if (score === 0 && Math.random() > 0.95) {
-              handleGoForAll();
-            } else {
+            const myTeam = teamOf(currentPlayer.position);
+            const myScore = myTeam === 1 ? status.scores.team1.tricks : status.scores.team2.tricks;
+            const secure = shouldSecure({
+              hand: currentPlayer.hand,
+              trumpSuit: status.trumpSuit || undefined,
+              myScore,
+              tricksInPile: status.tricksInPile,
+              cardsLeftThisHand: currentPlayer.hand.length,
+              difficulty,
+            });
+            console.log(`AI ${currentPlayer.name} secure decision: ${secure ? 'SECURE' : 'COURT'} (score=${myScore}, pile=${status.tricksInPile})`);
+            if (secure) {
               handleSecure();
+            } else {
+              handleGoForAll();
             }
           }
         }, 1200);
@@ -1116,25 +1226,33 @@ export default function App() {
               } ${status.state === 'declaring_trump' && pos === 'bottom' ? 'scale-110 mb-4' : ''} ${
                 pos !== 'bottom' ? 'hidden' : 'flex'
               }`}>
-                {p.hand.map((card, i) => (
-                  <div 
-                    key={card.id} 
+                {p.hand.map((card, i) => {
+                  // Responsive overlap: in portrait phones, 8 cards need to fit in ~320-380px.
+                  // Card is 48px wide on mobile (w-12). With -20px overlap: 48 + 7*28 = 244px.
+                  // In landscape / larger screens, card is 72px wide (sm:w-18). With -30px: 72 + 7*42 = 366px.
+                  const isMobile = typeof window !== 'undefined' ? window.innerWidth < 640 : false;
+                  const horizGap   = status.state === 'declaring_trump' && pos === 'bottom' ? '-4px' : (isMobile ? '-20px' : '-30px');
+                  const vertGap    = isMobile ? '-36px' : '-44px';
+                  return (
+                  <div
+                    key={card.id}
                     className="transition-all duration-300"
-                    style={{ 
-                      marginLeft: pos === 'bottom' || pos === 'top' ? (i > 0 ? (status.state === 'declaring_trump' && pos === 'bottom' ? '-8px' : '-36px') : '0') : '0',
-                      marginTop: pos === 'left' || pos === 'right' ? (i > 0 ? '-50px' : '0') : '0',
+                    style={{
+                      marginLeft: (pos === 'bottom' || pos === 'top') ? (i > 0 ? horizGap : '0') : '0',
+                      marginTop:  (pos === 'left'   || pos === 'right') ? (i > 0 ? vertGap  : '0') : '0',
                       zIndex: i
                     }}
                   >
-                    <CardUI 
-                      card={card} 
+                    <CardUI
+                      card={card}
                       theme={theme}
-                      hidden={gameMode === 'single' ? p.position !== 'bottom' : (user ? p.id !== user.uid : p.position !== 'bottom')} 
+                      hidden={gameMode === 'single' ? p.position !== 'bottom' : (user ? p.id !== user.uid : p.position !== 'bottom')}
                       disabled={status.state === 'playing' ? (!isMyTurn || !canPlayCard(card, p.hand, status.currentTrick.leadSuit)) : (status.state === 'declaring_trump' && (p.position === 'bottom') ? false : true)}
                       onClick={() => playCard(p.id, card)}
                     />
                   </div>
-                ))}
+                  );
+                })}
                 {p.hand.length === 0 && p.isAI && (
                    <div className="w-14 h-20 sm:w-18 sm:h-26 border-2 border-dashed border-white/10 rounded-lg flex items-center justify-center opacity-20">
                       <Layers size={16} />
@@ -1320,7 +1438,7 @@ export default function App() {
                             )}
                          </div>
                          <div className="flex-1">
-                            <h3 className="font-black text-base leading-none mb-1">Rajab Nasir</h3>
+                            <h3 className="font-black text-base leading-none mb-1">{userProfile?.displayName || user?.displayName || 'Player'}</h3>
                             <div className="flex items-center gap-2">
                                <div className="bg-lime-500 text-black text-[9px] font-black px-1.5 py-0.5 rounded uppercase leading-none">Lvl {userProfile?.progression?.level || 1}</div>
                                <div className="w-16 h-1.5 bg-black/40 rounded-full overflow-hidden">
@@ -1546,39 +1664,92 @@ export default function App() {
 
           {activeTab === 'clubs' && (
             <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4">
-              <div className="flex items-center justify-between">
-                <button onClick={() => setActiveTab('home')} className="text-xs font-black uppercase text-accent/60 flex items-center gap-1">
+              <div className="flex items-center justify-between mb-2">
+                <button onClick={() => setActiveTab('home')} className="text-xs font-black uppercase text-accent/60 flex items-center gap-1 hover:text-accent transition-colors">
                   <Plus size={12} className="rotate-45" /> Back
                 </button>
-                <h2 className="text-2xl font-black italic uppercase italic">Clubs</h2>
+                <h2 className="text-2xl font-black italic uppercase">Stats</h2>
               </div>
-              <div className="grid grid-cols-1 gap-3">
-                 {[
-                   { n: 'Vanguard Elites', m: '42/50', t: '5.2k' },
-                   { n: 'Rung Masters', m: '12/50', t: '1.8k' },
-                   { n: 'Royale Knights', m: '30/50', t: '3.4k' }
-                 ].map((club, idx) => (
-                    <div key={idx} className="bg-white/5 border border-white/10 p-4 rounded-3xl flex items-center justify-between group hover:bg-white/10 transition-all">
-                       <div className="flex items-center gap-4">
-                          <div className="w-12 h-12 bg-indigo-500 rounded-2xl flex items-center justify-center shadow-lg text-white">
-                             <Users size={24} />
-                          </div>
-                          <div>
-                             <p className="font-black italic text-sm">{club.n}</p>
-                             <p className="text-[10px] font-bold opacity-40 uppercase tracking-widest">{club.m} Members</p>
-                          </div>
-                       </div>
-                       <div className="text-right">
-                          <div className="flex items-center gap-1 text-yellow-400 font-bold text-xs mb-1">
-                             <Trophy size={10} /> {club.t}
-                          </div>
-                          <button className="bg-white/10 px-3 py-1 rounded-lg text-[9px] font-black uppercase hover:bg-white text-slate-900 transition-all">Join</button>
-                       </div>
+
+              {/* Level / XP / Trophies header */}
+              <div className="bg-gradient-to-br from-indigo-600/40 to-purple-900/40 border border-white/10 rounded-[2rem] p-5 relative overflow-hidden">
+                <div className="absolute -right-6 -top-6 opacity-10">
+                  <Trophy size={110} />
+                </div>
+                <div className="relative z-10">
+                  <p className="text-[9px] font-black uppercase tracking-[0.25em] text-white/40 mb-1">Progression</p>
+                  <div className="flex items-end gap-3 mb-3">
+                    <span className="text-5xl font-black italic text-white leading-none">Lvl {userProfile?.progression?.level ?? 1}</span>
+                    <span className="text-xs font-bold text-white/50 mb-1">
+                      {(userProfile?.progression?.xp ?? 0) % 500}/500 XP
+                    </span>
+                  </div>
+                  <div className="w-full h-2 bg-black/40 rounded-full overflow-hidden mb-3">
+                    <div
+                      className="h-full bg-lime-500 transition-all"
+                      style={{ width: `${Math.min(100, ((userProfile?.progression?.xp ?? 0) % 500) / 5)}%` }}
+                    />
+                  </div>
+                  <div className="flex items-center gap-1 text-yellow-300 font-black text-sm">
+                    <Trophy size={14} /> {userProfile?.progression?.trophies ?? 0} Trophies
+                  </div>
+                </div>
+              </div>
+
+              {/* Stat grid */}
+              <div className="grid grid-cols-2 gap-3">
+                {[
+                  { label: 'Wins',         value: userProfile?.stats?.wins ?? 0,          bg: 'bg-emerald-500/20', fg: 'text-emerald-300', icon: <Trophy size={20}/> },
+                  { label: 'Sets',         value: userProfile?.stats?.sets ?? 0,          bg: 'bg-sky-500/20',     fg: 'text-sky-300',     icon: <Layers size={20}/> },
+                  { label: 'Courts',       value: userProfile?.stats?.courts ?? 0,        bg: 'bg-amber-500/20',   fg: 'text-amber-300',   icon: <Trophy size={20}/> },
+                  { label: 'Super Courts', value: userProfile?.stats?.superCourts ?? 0,   bg: 'bg-rose-500/20',    fg: 'text-rose-300',    icon: <Trophy size={20}/> },
+                  { label: 'Win Streak',   value: userProfile?.stats?.winStreak ?? 0,     bg: 'bg-orange-500/20',  fg: 'text-orange-300',  icon: <RotateCcw size={20}/> },
+                  { label: 'Best Streak',  value: userProfile?.stats?.maxWinStreak ?? 0,  bg: 'bg-fuchsia-500/20', fg: 'text-fuchsia-300', icon: <RotateCcw size={20}/> },
+                ].map(s => (
+                  <div key={s.label} className="bg-white/5 border border-white/10 rounded-2xl p-4 flex flex-col items-start gap-2">
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${s.bg} ${s.fg}`}>
+                      {s.icon}
                     </div>
-                 ))}
-                 <button className="w-full py-4 bg-lime-500 rounded-3xl text-slate-900 font-black uppercase italic shadow-[0_4px_0_rgb(101,163,13)] active:translate-y-1 active:shadow-none transition-all mt-4">
-                   Create My Club
-                 </button>
+                    <div>
+                      <p className="text-2xl font-black italic leading-none">{s.value}</p>
+                      <p className="text-[9px] font-black uppercase tracking-widest text-white/40 mt-1">{s.label}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Badges */}
+              <div className="bg-black/20 rounded-[2rem] p-4 border border-white/5">
+                <p className="text-[10px] font-black uppercase tracking-[0.25em] text-white/40 mb-3">Badges</p>
+                {(userProfile?.badges?.length ?? 0) > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {userProfile!.badges.map(b => (
+                      <span key={b} className="px-3 py-1 rounded-full bg-yellow-500/20 border border-yellow-500/40 text-yellow-300 text-[10px] font-black uppercase tracking-widest">
+                        {b.replace(/_/g, ' ')}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-white/30 font-bold">No badges earned yet — win a Super Court or hit a 5-win streak to unlock them.</p>
+                )}
+              </div>
+
+              {/* Currency snapshot */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-2xl p-4 flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-yellow-500 text-slate-900 flex items-center justify-center font-black">C</div>
+                  <div>
+                    <p className="text-xl font-black leading-none">{userProfile?.currency?.coins ?? 0}</p>
+                    <p className="text-[9px] font-black uppercase tracking-widest text-white/40 mt-1">Coins</p>
+                  </div>
+                </div>
+                <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-4 flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-emerald-500 text-slate-900 flex items-center justify-center font-black">G</div>
+                  <div>
+                    <p className="text-xl font-black leading-none">{userProfile?.currency?.gems ?? 0}</p>
+                    <p className="text-[9px] font-black uppercase tracking-widest text-white/40 mt-1">Gems</p>
+                  </div>
+                </div>
               </div>
             </div>
           )}
@@ -1842,10 +2013,10 @@ export default function App() {
 
         {status.state === 'round_end' && roundEndDetails && (
           <div className="fixed inset-0 z-[200] flex items-center justify-center p-0 sm:p-4 bg-black/98 overflow-y-auto">
-            <motion.div 
+            <motion.div
                initial={{ opacity: 0, scale: 0.9, y: 30 }}
                animate={{ opacity: 1, scale: 1, y: 0 }}
-               className="bg-[#020617] border-0 sm:border border-emerald-500/20 rounded-none sm:rounded-[3rem] p-4 sm:p-10 max-w-xl w-full h-full sm:h-auto text-center shadow-2xl relative overflow-hidden sm:max-h-[90vh] flex flex-col justify-center"
+               className="bg-[#020617] border-0 sm:border border-emerald-500/20 rounded-none sm:rounded-[3rem] p-4 sm:p-10 max-w-xl w-full max-h-full sm:max-h-[90vh] text-center shadow-2xl relative overflow-y-auto flex flex-col gap-2"
             >
               <div className="absolute top-0 inset-x-0 h-1.5 bg-gradient-to-r from-transparent via-accent/40 to-transparent" />
               
@@ -1905,7 +2076,7 @@ export default function App() {
                           <motion.div 
                             initial={{ scale: 0, rotate: -20 }}
                             animate={{ scale: 1, rotate: 12 }}
-                            className="absolute -top-4 -right-4 bg-accent text-slate-900 text-[7px] sm:text-[9px] font-black py-0.5 px-1.5 sm:py-1.5 sm:px-3 rounded-full uppercase tracking-widest shadow-xl border-2 border-slate-900"
+                            className="absolute -bottom-3 -right-2 bg-accent text-slate-900 text-[7px] sm:text-[9px] font-black py-0.5 px-1.5 sm:py-1.5 sm:px-3 rounded-full uppercase tracking-widest shadow-xl border-2 border-slate-900"
                           >
                             Winner
                           </motion.div>
@@ -1928,7 +2099,7 @@ export default function App() {
                           <motion.div 
                             initial={{ scale: 0, rotate: 20 }}
                             animate={{ scale: 1, rotate: -12 }}
-                            className="absolute -top-4 -right-4 bg-accent text-slate-900 text-[7px] sm:text-[9px] font-black py-0.5 px-1.5 sm:py-1.5 sm:px-3 rounded-full uppercase tracking-widest shadow-xl border-2 border-slate-900"
+                            className="absolute -bottom-3 -right-2 bg-accent text-slate-900 text-[7px] sm:text-[9px] font-black py-0.5 px-1.5 sm:py-1.5 sm:px-3 rounded-full uppercase tracking-widest shadow-xl border-2 border-slate-900"
                           >
                             Winner
                           </motion.div>
