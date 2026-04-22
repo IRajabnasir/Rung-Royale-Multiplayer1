@@ -34,6 +34,8 @@ export interface Theme {
     text: string;
   };
   fontFamily: string;
+  pattern?: string;
+  cardPattern?: string;
 }
 
 export interface MatchState {
@@ -75,6 +77,7 @@ export interface Match {
   matchId: string;
   hostId: string;
   type: 'public' | 'private';
+  isRanked?: boolean;
   status: 'waiting' | 'playing' | 'finished';
   players: {
     id: string;

@@ -14,6 +14,11 @@ export interface UserProfile {
     winStreak: number;
     maxWinStreak: number;
   };
+  progression: {
+    level: number;
+    xp: number;
+    trophies: number;
+  };
   currency: {
     coins: number;
     gems: number;
@@ -24,6 +29,7 @@ export interface UserProfile {
     status: 'online' | 'offline';
   }[];
   badges: string[];
+  isGuest?: boolean;
 }
 
 export const syncUserProfile = async (user: any) => {
@@ -44,6 +50,11 @@ export const syncUserProfile = async (user: any) => {
         winStreak: 0,
         maxWinStreak: 0
       },
+      progression: {
+        level: 1,
+        xp: 0,
+        trophies: 0
+      },
       currency: {
         coins: 500,
         gems: 10
@@ -54,11 +65,23 @@ export const syncUserProfile = async (user: any) => {
     await setDoc(userRef, newUser);
     return newUser;
   } else {
-    return userSnap.data() as UserProfile;
+    const existing = userSnap.data() as UserProfile;
+    // Migration for existing users
+    if (!existing.progression) {
+      existing.progression = { level: 1, xp: 0, trophies: 0 };
+      await updateDoc(userRef, { progression: existing.progression });
+    }
+    return existing;
   }
 };
 
 export const updateUserProfile = async (uid: string, updates: Partial<UserProfile> | Record<string, any>) => {
   const userRef = doc(db, 'users', uid);
   await updateDoc(userRef, updates);
+};
+
+export const deleteUserProfile = async (uid: string) => {
+  const userRef = doc(db, 'users', uid);
+  const { deleteDoc } = await import('firebase/firestore');
+  await deleteDoc(userRef);
 };

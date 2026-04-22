@@ -12,7 +12,7 @@ import {
   deleteDoc
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { Match, MatchState } from '../types';
+import { Match, MatchState, PlayerPosition } from '../types';
 
 export const createMatch = async (userId: string, userName: string, type: 'public' | 'private' = 'public') => {
   const matchId = Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -81,6 +81,31 @@ export const updateMatchState = async (matchId: string, newState: MatchState) =>
   const matchRef = doc(db, 'matches', matchId);
   await updateDoc(matchRef, {
     state: newState,
+    updatedAt: serverTimestamp()
+  });
+};
+
+export const addAIPlayer = async (matchId: string) => {
+  const matchRef = doc(db, 'matches', matchId);
+  const matchSnap = await getDoc(matchRef);
+  if (!matchSnap.exists()) return;
+  const match = matchSnap.data() as Match;
+  if (match.players.length >= 4) return;
+
+  const positions: PlayerPosition[] = ['bottom', 'left', 'top', 'right'];
+  const takenPositions = match.players.map(p => p.position);
+  const nextPos = positions.find(pos => !takenPositions.includes(pos))!;
+
+  const aiPlayer = {
+    id: `ai-${Math.random().toString(36).substring(2, 5)}`,
+    name: `Bot ${match.players.length}`,
+    position: nextPos,
+    isAI: true,
+    ready: true
+  };
+
+  await updateDoc(matchRef, {
+    players: [...match.players, aiPlayer],
     updatedAt: serverTimestamp()
   });
 };

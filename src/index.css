@@ -1,1 +1,14 @@
 @import "tailwindcss";
+
+@layer utilities {
+  /* Mobile-first optimizations */
+  @media (max-width: 639px) {
+    .hide-scrollbar::-webkit-scrollbar {
+      display: none;
+    }
+    .hide-scrollbar {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+  }
+}

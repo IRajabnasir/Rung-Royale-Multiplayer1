@@ -29,14 +29,21 @@ service cloud.firestore {
         return data.uid == userId &&
                data.displayName is string && data.displayName.size() <= 100 &&
                (data.email == null || (data.email is string && data.email.size() <= 100)) &&
-               (data.photoURL == null || (data.photoURL is string && data.photoURL.size() <= 500));
+               (data.photoURL == null || (data.photoURL is string && data.photoURL.size() <= 500)) &&
+               (data.stats is map) &&
+               (data.progression is map) &&
+               (data.currency is map) &&
+               (data.friends is list) &&
+               (data.badges is list);
       }
 
       allow get: if isSignedIn();
       allow list: if isSignedIn() && isOwner(userId);
       allow create: if isOwner(userId) && isValidUser(incoming());
       allow update: if isOwner(userId) && isValidUser(incoming()) && 
-                    incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'stats']);
+                    incoming().diff(existing()).affectedKeys().hasOnly([
+                      'displayName', 'photoURL', 'stats', 'progression', 'currency', 'friends', 'badges'
+                    ]);
     }
 
     // --- Matches ---
@@ -55,21 +62,23 @@ service cloud.firestore {
                data.type in ['public', 'private'] &&
                data.players is list && data.players.size() <= 4 &&
                data.playerIds is list && data.playerIds.size() <= 4 &&
-               (data.state == null || data.state is map);
+               (data.state == null || data.state is map) &&
+               (data.createdAt == null || data.createdAt is timestamp) &&
+               (data.updatedAt == null || data.updatedAt is timestamp);
       }
 
-      allow get: if isSignedIn();
-      allow list: if isSignedIn(); 
-      allow create: if isSignedIn() && isValidMatch(incoming()) && 
+      allow get: if isSignedIn() && isValidId(matchId);
+      allow list: if isSignedIn() && (resource.data.type == 'public' || request.auth.uid in resource.data.playerIds); 
+      allow create: if isSignedIn() && isValidId(matchId) && isValidMatch(incoming()) && 
                     incoming().hostId == request.auth.uid &&
                     (incoming().createdAt == request.time || !('createdAt' in incoming()));
       
-      allow update: if isSignedIn() && isValidMatch(incoming()) && (
+      allow update: if isSignedIn() && isValidId(matchId) && isValidMatch(incoming()) && (
         isHost() ||
-        (isPlayer() && incoming().diff(existing()).affectedKeys().hasOnly(['state', 'updatedAt', 'players', 'playerIds']))
+        (isPlayer() && incoming().diff(existing()).affectedKeys().hasOnly(['state', 'updatedAt', 'players', 'playerIds', 'status']))
       ) && (incoming().updatedAt == request.time || !('updatedAt' in incoming()));
       
-      allow delete: if isHost();
+      allow delete: if isHost() && isValidId(matchId);
     }
   }
 }

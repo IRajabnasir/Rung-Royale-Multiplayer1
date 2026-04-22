@@ -30,7 +30,12 @@ export const shuffle = (deck: Card[]): Card[] => {
   return newDeck;
 };
 
-export const compareCards = (cardA: Card, cardB: Card, leadSuit: Suit, trumpSuit?: Suit): number => {
+export const compareCards = (cardA: Card, cardB: Card, leadSuit: Suit, trumpSuit?: Suit, aceOffMode?: boolean): number => {
+  const getVal = (c: Card) => {
+    if (aceOffMode && c.rank === 'A') return 1;
+    return RANK_VALUE[c.rank];
+  };
+
   // If one is trump and other is not
   if (trumpSuit) {
     if (cardA.suit === trumpSuit && cardB.suit !== trumpSuit) return 1;
@@ -39,7 +44,7 @@ export const compareCards = (cardA: Card, cardB: Card, leadSuit: Suit, trumpSuit
 
   // If both are same suit (either both lead, both trump, or both same off-suit)
   if (cardA.suit === cardB.suit) {
-    return RANK_VALUE[cardA.rank] - RANK_VALUE[cardB.rank];
+    return getVal(cardA) - getVal(cardB);
   }
 
   // If cardA is lead suit and cardB is not (and neither is trump)
@@ -50,12 +55,12 @@ export const compareCards = (cardA: Card, cardB: Card, leadSuit: Suit, trumpSuit
   return 0;
 };
 
-export const determineTrickWinner = (trick: Trick, trumpSuit?: Suit): string => {
+export const determineTrickWinner = (trick: Trick, trumpSuit?: Suit, aceOffMode?: boolean): string => {
   if (!trick.cards.length || !trick.leadSuit) return '';
   
   let winner = trick.cards[0];
   for (let i = 1; i < trick.cards.length; i++) {
-    if (compareCards(trick.cards[i].card, winner.card, trick.leadSuit, trumpSuit) > 0) {
+    if (compareCards(trick.cards[i].card, winner.card, trick.leadSuit, trumpSuit, aceOffMode) > 0) {
       winner = trick.cards[i];
     }
   }
@@ -78,12 +83,12 @@ export const sortHand = (hand: Card[]): Card[] => {
   });
 };
 
-export const initializePlayers = (): Player[] => {
+export const initializePlayers = (aiEnabled: boolean = true): Player[] => {
   return [
     { id: 'player-1', name: 'You', position: 'bottom', hand: [], isAI: false, isSir: false, isDealer: false },
-    { id: 'player-2', name: 'Alpha', position: 'left', hand: [], isAI: true, isSir: false, isDealer: false },
-    { id: 'player-3', name: 'Beta (Partner)', position: 'top', hand: [], isAI: true, isSir: false, isDealer: false },
-    { id: 'player-4', name: 'Gamma', position: 'right', hand: [], isAI: true, isSir: false, isDealer: false },
+    { id: 'player-2', name: 'Alpha', position: 'left', hand: [], isAI: aiEnabled, isSir: false, isDealer: false },
+    { id: 'player-3', name: 'Beta (Partner)', position: 'top', hand: [], isAI: aiEnabled, isSir: false, isDealer: false },
+    { id: 'player-4', name: 'Gamma', position: 'right', hand: [], isAI: aiEnabled, isSir: false, isDealer: false },
   ];
 };
 
@@ -97,22 +102,23 @@ export const canPlayCard = (card: Card, hand: Card[], leadSuit?: Suit): boolean 
 };
 
 // Basic AI move
-export const getAIMove = (player: Player, currentTrick: Trick, trumpSuit?: Suit): Card => {
+export const getAIMove = (player: Player, currentTrick: Trick, trumpSuit?: Suit, aceOffMode?: boolean): Card => {
   const playableCards = player.hand.filter(c => canPlayCard(c, player.hand, currentTrick.leadSuit));
   
   if (playableCards.length === 0) return player.hand[0]; // Should not happen
 
   // If leading
   if (!currentTrick.leadSuit) {
-    // Try to play high cards of a suit
-    return playableCards.sort((a, b) => RANK_VALUE[b.rank] - RANK_VALUE[a.rank])[0];
+    // Try to play highest cards of a suit
+    return playableCards.sort((a, b) => {
+      const getVal = (c: Card) => (aceOffMode && c.rank === 'A') ? 1 : RANK_VALUE[c.rank];
+      return getVal(b) - getVal(a);
+    })[0];
   }
 
   // If following - try to win if possible, otherwise play low
   const bestCard = playableCards.sort((a, b) => {
-    // This is a very simple AI: just try to win the trick with lowest possible card
-    // or play lowest card if cannot win.
-    const cmp = compareCards(a, b, currentTrick.leadSuit!, trumpSuit);
+    const cmp = compareCards(a, b, currentTrick.leadSuit!, trumpSuit, aceOffMode);
     return cmp;
   });
 
